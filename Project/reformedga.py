@@ -128,10 +128,9 @@ class GenAlgo:
         pops[0]=population
 
         #Start loop
-        
         for generation in range(iterations):
             #Initializing
-            t1 = time.time()
+            t1 = time.perf_counter () 
             scoreboard = np.zeros(size_population)
             population = pops[generation]
             
@@ -150,8 +149,6 @@ class GenAlgo:
                 best_scores[generation][index] = scoreboard[pos]
                 if index == 0 and scoreboard[pos] == float('inf'):
                     raise ValueError("The best player has a score of infinity. Check the bounds or the symbols used")
-            
-
 
             best_pops[generation]=best_candidates.copy()
             new_population = np.zeros(size_population, dtype='object')
@@ -172,7 +169,7 @@ class GenAlgo:
                 new_population[i]=best_candidates[i]
             
             pops[generation+1]= new_population
-            t2=time.time()
+            t2=time.perf_counter () 
             elapsed_time =t2-t1
             print("Generation : "+str(generation+1)+" took {:.3f} seconds to finish".format(elapsed_time))
             print("***Time remaining: {:.3f} minutes***".format((iterations-generation-1)*elapsed_time/(60))) 
