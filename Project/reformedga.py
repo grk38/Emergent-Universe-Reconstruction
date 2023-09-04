@@ -12,11 +12,14 @@ import matplotlib.pyplot as plt
 import multiprocessing
 from multiprocessing import Pool
 from sympy import sympify
+from tqdm import tqdm
+
 
 class Solution:
-    def __init__(self, genome):
+    def __init__(self, genome,fitness_expression):
         self.genome = genome
-
+        self.fitness_expression = fitness_expression
+       
     def score(self,other):
         nS_value = other.nS(*self.genome)
         r_value = other.r(*self.genome)
@@ -24,14 +27,18 @@ class Solution:
         dev_nS = abs(nS_value-other.nSmin)+abs(nS_value-other.nSmax)
         dev_r = abs(r_value-other.rlim)
         dev_N = abs(efolds-other.Nmin)+abs(efolds-other.Nmax)
-        scoring = dev_r*dev_r + dev_nS*100 + dev_N*0.1 #Another possible substitution is dev_r*c, with the constant c being appropriate for your own specific problem.This method is computationally faster
+        scoring = eval(self.fitness_expression, {
+            'dev_nS': dev_nS,
+            'dev_r': dev_r,
+            'dev_N': dev_N
+        }) #Another possible substitution is dev_r*c, with the constant c being appropriate for your own specific problem.This method is computationally faster
         return scoring                                 #,but keep in mind that the more weight is put in dev_r the more likely the algorithm will try to minimize it, whilst ignoring the validity
                                                        # of the other constraints , turning into a "greedy" optimum instead of a local or global one
     #Thats the way i defined the fitness function . You could modify it as you like depending on your own problem
 
 
 class GenAlgo:
-    def __init__(self,str_nS,str_r,input_symbols,mathematica_form=True):
+    def __init__(self,str_nS,str_r,input_symbols,mathematica_form=True,fitness_expression='dev_r * dev_r + dev_nS * 100 + dev_N * 0.1'):
         if mathematica_form:
             self.python_expr_r = parse_mathematica(str_r)
             self.python_expr_nS = parse_mathematica(str_nS)
@@ -40,6 +47,7 @@ class GenAlgo:
             self.python_expr_nS = str_nS
 
         self.function_symbols = input_symbols
+        self.fitness_expression = fitness_expression
         #We turn ghe expression from mathematica code into python form
 
         #The Planck 2018 constaints
@@ -66,6 +74,7 @@ class GenAlgo:
             return expr_subs.evalf() 
         else: return float('inf')
 
+    #    
     def generator(self,b):
         n = len(b)
         output = np.zeros(n)
@@ -78,7 +87,7 @@ class GenAlgo:
 #The generator function is large-number-biased for inputs that differ more that 3 orders of magnitude. This snippet of code quarantes that there is at least one point between two concecutive orders
 #of magnitude
 
-
+       
     def mutate(self,gene): # The mutating function
         self.scale = 1 #Choose this as you please. An interesting idea would be for the random variable to belong in a standard
     #distribution with s defining the std. I tried it but the convergence rate was worse, along with being more computationally
@@ -120,17 +129,16 @@ class GenAlgo:
         if loaded_population is None:
             for i in range(size_population):
                 var_genome_0 = self.generator(bounds)
-                sol = Solution(var_genome_0)
+                sol = Solution(genome=var_genome_0,fitness_expression=self.fitness_expression)
                 population[i] = sol  
         elif isinstance(loaded_population, np.ndarray) and loaded_population.dtype == object:
             population = loaded_population[-1]
         
         pops[0]=population
-
         #Start loop
-        for generation in range(iterations):
+        for generation in tqdm(range(iterations),dynamic_ncols=True):
             #Initializing
-            t1 = time.perf_counter () 
+            # t1 = time.perf_counter () 
             scoreboard = np.zeros(size_population)
             population = pops[generation]
             
@@ -163,24 +171,16 @@ class GenAlgo:
                     genetic_tree[index]=var_genome
 
             #Mutate       
-            new_population = np.array([Solution(np.array([self.mutate(gene) for gene in tree])) for tree in genetic_tree])
+            new_population = np.array([Solution(genome=np.array([self.mutate(gene) for gene in tree]),fitness_expression=self.fitness_expression) for tree in genetic_tree])
             #Keeping the best players of the previous generation
             for i in range(len(best_candidates)):
                 new_population[i]=best_candidates[i]
             
             pops[generation+1]= new_population
-            t2=time.perf_counter () 
-            elapsed_time =t2-t1
-            print("Generation : "+str(generation+1)+" took {:.3f} seconds to finish".format(elapsed_time))
-            print("***Time remaining: {:.3f} minutes***".format((iterations-generation-1)*elapsed_time/(60))) 
-        #Finish for loop
         best_pops = best_pops[:-1] # The last element is zero , so we need to get rid of it
         print("Code finished compiling")
         return pops, best_pops, best_scores #It returns the populations of all the players, the populations of all the best players along with their scores
-
-
-
-
+       
     def process_point(self,obj):
         genome = obj.genome
         test_nS = self.nS(*genome)
@@ -189,7 +189,7 @@ class GenAlgo:
             return genome, test_nS, test_r
         else:
             return None
-
+       
     def clear_points(self,arr):
         flattened = np.concatenate(arr).ravel()
 
