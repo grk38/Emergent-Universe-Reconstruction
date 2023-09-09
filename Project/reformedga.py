@@ -133,6 +133,8 @@ class GenAlgo:
                 population[i] = sol  
         elif isinstance(loaded_population, np.ndarray) and loaded_population.dtype == object:
             population = loaded_population[-1]
+        if len(bounds) != len(self.function_symbols):
+            raise ValueError(f"Different dimensions. Bounds dimensions : {len(bounds)} and total symbols : {self.function_symbols}")
         
         pops[0]=population
         #Start loop
@@ -141,10 +143,8 @@ class GenAlgo:
             # t1 = time.perf_counter () 
             scoreboard = np.zeros(size_population)
             population = pops[generation]
-            
             #Scoring
             scoreboard = self.parallel(population)
-                
             best_candidates_pos = np.argpartition(scoreboard, fit_lim+1)[:fit_lim+1]
             #Fitness
             best_candidates = np.zeros(fit_lim+1,dtype='object')
