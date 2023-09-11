@@ -9,16 +9,15 @@ import math
 import random
 import time
 import matplotlib.pyplot as plt
-import multiprocessing
-from multiprocessing import Pool
 from sympy import sympify
 from tqdm import tqdm
 import warnings
-
+from pathos.multiprocessing import ProcessingPool
+import pathos
 class Solution:
-    def __init__(self, genome,fitness_expression):
+    def __init__(self, genome):
         self.genome = genome
-        self.fitness_expression = fitness_expression
+        
        
     def score(self,other):
         nS_value = other.nS(self.genome)
@@ -27,18 +26,15 @@ class Solution:
         dev_nS = abs(nS_value-other.nSmin)+abs(nS_value-other.nSmax)
         dev_r = abs(r_value-other.rlim)
         dev_N = abs(efolds-other.Nmin)+abs(efolds-other.Nmax)
-        scoring = eval(self.fitness_expression, {
-            'dev_nS': dev_nS,
-            'dev_r': dev_r,
-            'dev_N': dev_N
-        }) #Another possible substitution is dev_r*c, with the constant c being appropriate for your own specific problem.This method is computationally faster
-        return scoring                                 #,but keep in mind that the more weight is put in dev_r the more likely the algorithm will try to minimize it, whilst ignoring the validity
+        objectScore = other.scoringFunction(dev_nS,dev_r,dev_N)
+         #Another possible substitution is dev_r*c, with the constant c being appropriate for your own specific problem.This method is computationally faster
+        return objectScore                                 #,but keep in mind that the more weight is put in dev_r the more likely the algorithm will try to minimize it, whilst ignoring the validity
                                                        # of the other constraints , turning into a "greedy" optimum instead of a local or global one
     #Thats the way i defined the fitness function . You could modify it as you like depending on your own problem
 
 
 class GenAlgo:
-    def __init__(self,str_nS,str_r,input_symbols,mathematica_form=True,fitness_expression='dev_r * dev_r + dev_nS * 100 + dev_N * 0.1'):
+    def __init__(self,str_nS,str_r,input_symbols,mathematica_form=True,fitness_expression='devr * devr + devnS * 100 + devN * 0.1'):
         if mathematica_form:
             self.python_expr_r = parse_mathematica(str_r)
             self.python_expr_nS = parse_mathematica(str_nS)
@@ -62,6 +58,10 @@ class GenAlgo:
         #Now to make the actual functions
         self.nSsympyFunction = sym.lambdify(self.function_symbols,self.python_expr_nS,'numpy')
         self.rsympyFunction = sym.lambdify(self.function_symbols,self.python_expr_r,'numpy')
+
+        self.fitness_expression = fitness_expression
+        self.scoringSymbols = sym.symbols('devnS devr devN')
+        self.scoringFunction = sym.lambdify(self.scoringSymbols,self.fitness_expression,'numpy')
         pass
 
 
@@ -120,7 +120,7 @@ class GenAlgo:
         if loaded_population is None:
             for i in range(size_population):
                 var_genome_0 = self.generator(bounds)
-                sol = Solution(genome=var_genome_0,fitness_expression=self.fitness_expression)
+                sol = Solution(genome=var_genome_0)
                 population[i] = sol  
         elif isinstance(loaded_population, np.ndarray) and loaded_population.dtype == object:
             population = loaded_population[-1]
@@ -164,7 +164,7 @@ class GenAlgo:
                 for index in range(int(lower),int(upper),1):
                     genetic_tree[index]=var_genome
             #Mutate       
-            new_population = np.array([Solution(genome=np.array([self.mutate(gene) for gene in tree]),fitness_expression=self.fitness_expression) for tree in genetic_tree])
+            new_population = np.array([Solution(genome=np.array([self.mutate(gene) for gene in tree])) for tree in genetic_tree])
             #Keeping the best players of the previous generation
             for i in range(len(best_candidates)):
                 new_population[i]=best_candidates[i]
@@ -195,7 +195,95 @@ class GenAlgo:
                 nS_arr.append(returnValue[0])
                 r_arr.append(returnValue[1])
         return values, nS_arr, r_arr
+    
+    def ParallelStart(self,args):
+        bounds, size_population, fit_lim, iterations = args
+        loaded_population = None
+        #Making the first population manually
+        global pops
+        global best_pops
+        global best_scores
+        fit_lim = fit_lim+1
+        best_scores=np.zeros((iterations,fit_lim+1),dtype=float)
+        pops = np.zeros(iterations+1, dtype='object')
+        best_pops = np.zeros(iterations+1, dtype='object')
+        global population
+        population = np.empty(size_population, dtype='object')  #The last parameter is necessary as numpy gets cranky
+        #if we dont specify we are dealing with objects
+        if loaded_population is None:
+            for i in range(size_population):
+                var_genome_0 = self.generator(bounds)
+                sol = Solution(genome=var_genome_0)
+                population[i] = sol  
+        elif isinstance(loaded_population, np.ndarray) and loaded_population.dtype == object:
+            population = loaded_population[-1]
+        if len(bounds) != len(self.function_symbols):
+            raise ValueError(f"Different dimensions. Bounds dimensions : {len(bounds)} and total symbols : {self.function_symbols}")
+        
+        pops[0]=population
+        #Start loop
+        for generation in tqdm(range(iterations),dynamic_ncols=True):
+            #Initializing
+            # t1 = time.perf_counter () 
+            scoreboard = np.zeros(size_population)
+            population = pops[generation]
+            #Scoring
 
+            scoreboard = np.array([obj.score(self) for obj in population])
+
+            best_candidates_pos = np.argpartition(scoreboard, fit_lim+1)[:fit_lim+1]
+
+            #Fitness
+            best_candidates = np.zeros(fit_lim+1,dtype='object')
+            #Keeping the best players
+            for index_position, position in enumerate(best_candidates_pos):
+                var = population[position]
+                best_candidates[index_position] = var
+            #Keeping the score of the best players, so that we dont calculate it all over again.
+            for index, pos in enumerate(best_candidates_pos):
+                best_scores[generation][index] = scoreboard[pos]
+                if index == 0 and scoreboard[pos] == float('inf'):
+                    raise ValueError("The best player has a score of infinity. Check the bounds or the symbols used")
+            
+            best_pops[generation]=best_candidates.copy()
+            new_population = np.zeros(size_population, dtype='object')
+            genetic_tree = np.zeros((size_population,len(bounds)))
+            ranges = np.linspace(0,size_population, fit_lim+2) 
+            #Crossover
+            for indicator in range(len(ranges)-1): #The players are equally distributed in the population
+                lower = math.floor(ranges[indicator])
+                upper = math.floor(ranges[indicator+1] )
+                var_genome = best_candidates[indicator].genome
+                for index in range(int(lower),int(upper),1):
+                    genetic_tree[index]=var_genome
+            #Mutate       
+            new_population = np.array([Solution(genome=np.array([self.mutate(gene) for gene in tree])) for tree in genetic_tree])
+            #Keeping the best players of the previous generation
+            for i in range(len(best_candidates)):
+                new_population[i]=best_candidates[i]
+            
+            pops[generation+1]= new_population
+        best_pops = best_pops[:-1] # The last element is zero , so we need to get rid of it
+        print("Code finished compiling")
+        return best_pops, best_scores
+    
+
+
+    def clearParallel(self,array):
+        flattenedArray = []
+        for row in array:
+            flattenedArray.append(np.concatenate(row[0]).ravel())
+        flattenedArrayFinal = np.concatenate(np.array(flattenedArray)).ravel()
+        values = []
+        nS_arr = []
+        r_arr = []
+        for obj in flattenedArrayFinal:
+            returnValue = self.process_point(obj)
+            if returnValue[0] is not None:
+                values.append(obj.genome)
+                nS_arr.append(returnValue[0])
+                r_arr.append(returnValue[1])
+        return values, nS_arr, r_arr
 
 def style(ax):
     plt.style.use('bmh')
@@ -221,3 +309,27 @@ def read_txt(name):
     data = [float(line) for line in lines]
     
     return data
+
+
+def RunParallel(obj,argsList):
+    numCPUS = pathos.helpers.cpu_count()
+    pool = ProcessingPool(nodes=numCPUS)
+
+    args_list = argsList
+
+    resultsParallel = pool.map(obj.ParallelStart, args_list)
+    clearedParallel = obj.clearParallel(resultsParallel)
+    scoresParallel = []
+    for row in resultsParallel:
+        scoresParallel.append(row[-1])
+
+    iterNumber = len(scoresParallel)
+    sizeScoreArr = len(scoresParallel[0][0])
+    n = sizeScoreArr*iterNumber
+    m = len(scoresParallel[0])
+    totalScores = [[None]*n for _ in range(m)]
+    for index_i in range(len(totalScores)):
+        for index_j in range(len(totalScores[0])):
+            totalScores[index_i][index_j] = scoresParallel[index_i%iterNumber][index_i][index_j%sizeScoreArr]
+
+    return clearedParallel, resultsParallel, totalScores
