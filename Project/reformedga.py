@@ -110,7 +110,7 @@ class GenAlgo:
         global pops
         global best_pops
         global best_scores
-        fit_lim = fit_lim+1
+        fit_lim = fit_lim-1
         best_scores=np.zeros((iterations,fit_lim+1),dtype=float)
         pops = np.zeros(iterations+1, dtype='object')
         best_pops = np.zeros(iterations+1, dtype='object')
